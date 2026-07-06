@@ -56,6 +56,13 @@ const exploreResult: ExploreResult = {
 
 Deno.test("isGuestPolicy - accepts a well-formed policy", () => {
   assert(isGuestPolicy({
+    read: { kinds: [0, 1], global_kinds: [24133], from_tenants_only: true },
+    write: { kinds: [1], tagged_to_tenant: false },
+  }))
+})
+
+Deno.test("isGuestPolicy - rejects a policy missing global_kinds", () => {
+  assertFalse(isGuestPolicy({
     read: { kinds: [0, 1], from_tenants_only: true },
     write: { kinds: [1], tagged_to_tenant: false },
   }))
@@ -63,13 +70,13 @@ Deno.test("isGuestPolicy - accepts a well-formed policy", () => {
 
 Deno.test("isGuestPolicy - rejects a policy with a non-boolean flag", () => {
   assertFalse(isGuestPolicy({
-    read: { kinds: [0, 1], from_tenants_only: "yes" },
+    read: { kinds: [0, 1], global_kinds: [24133], from_tenants_only: "yes" },
     write: { kinds: [1], tagged_to_tenant: false },
   }))
 })
 
 Deno.test("isGuestPolicy - rejects a policy missing the write side", () => {
-  assertFalse(isGuestPolicy({ read: { kinds: [0], from_tenants_only: true } }))
+  assertFalse(isGuestPolicy({ read: { kinds: [0], global_kinds: [24133], from_tenants_only: true } }))
 })
 
 Deno.test("isRateLimits - accepts numeric limits", () => {

@@ -1,9 +1,10 @@
 import type { EventId, PublicKey } from "@innis/nostr-core"
 import { isArrayOf, isNumberArray, isRecord, isValidEventId, isValidPublicKey } from "@innis/nostr-core"
 
-/** Hubstr guest read policy: which event `kinds` a non-tenant may read, and whether reads are restricted to tenant-authored events. */
+/** Hubstr guest read policy: which event `kinds` a non-tenant may read, which of those `global_kinds` are readable regardless of author (bypassing `from_tenants_only`), and whether the remaining reads are restricted to tenant-authored events. */
 export interface GuestReadPolicy {
   readonly kinds: ReadonlyArray<number>
+  readonly global_kinds: ReadonlyArray<number>
   readonly from_tenants_only: boolean
 }
 
@@ -20,7 +21,8 @@ export interface GuestPolicy {
 }
 
 const isGuestReadPolicy = (value: unknown): value is GuestReadPolicy =>
-  isRecord(value) && isNumberArray(value.kinds) && typeof value.from_tenants_only === "boolean"
+  isRecord(value) && isNumberArray(value.kinds) && isNumberArray(value.global_kinds) &&
+  typeof value.from_tenants_only === "boolean"
 
 const isGuestWritePolicy = (value: unknown): value is GuestWritePolicy =>
   isRecord(value) && isNumberArray(value.kinds) && typeof value.tagged_to_tenant === "boolean"
