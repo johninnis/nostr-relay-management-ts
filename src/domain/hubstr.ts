@@ -1,5 +1,5 @@
 import type { EventId, PublicKey } from "@innis/nostr-core"
-import { isArrayOf, isNumberArray, isRecord, isValidEventId, isValidPublicKey } from "@innis/nostr-core"
+import { isArrayOf, isNumberArray, isRecord, isStringArray, isValidEventId, isValidPublicKey } from "@innis/nostr-core"
 
 /** Hubstr guest read policy: which event `kinds` a non-tenant may read, which of those `global_kinds` are readable regardless of author (bypassing `from_tenants_only`), and whether the remaining reads are restricted to tenant-authored events. */
 export interface GuestReadPolicy {
@@ -8,10 +8,27 @@ export interface GuestReadPolicy {
   readonly from_tenants_only: boolean
 }
 
-/** Hubstr guest write policy: which event `kinds` a non-tenant may publish, and whether each must be tagged to a tenant. */
+/** One Hubstr guest write admission rule: the event carries `tag` with a value starting with one of `prefixes`. */
+export interface TagPrefixRule {
+  readonly tag: string
+  readonly prefixes: ReadonlyArray<string>
+}
+
+/**
+ * Hubstr guest write policy: which event `kinds` a non-tenant may publish, whether each must be tagged to a tenant,
+ * and the {@link TagPrefixRule}s any one of which admits it.
+ *
+ * `tagged_to_tenant` and `tag_prefixes` are alternatives: an event satisfies the policy by meeting whichever of the
+ * configured checks it can, so a relay can take gift wraps addressed to a tenant and comments naming a page at once.
+ * `kinds` is not an alternative — every guest write must pass it.
+ *
+ * `tag_prefixes` is absent on relays predating the rule and empty when none is configured; both mean no requirement.
+ * Always send it when writing a policy back — omitting the key clears any rules the relay holds.
+ */
 export interface GuestWritePolicy {
   readonly kinds: ReadonlyArray<number>
   readonly tagged_to_tenant: boolean
+  readonly tag_prefixes?: ReadonlyArray<TagPrefixRule> | null
 }
 
 /** Hubstr guest-access policy: the {@link GuestReadPolicy} and {@link GuestWritePolicy} applied to non-tenant clients. */
@@ -24,8 +41,12 @@ const isGuestReadPolicy = (value: unknown): value is GuestReadPolicy =>
   isRecord(value) && isNumberArray(value.kinds) && isNumberArray(value.global_kinds) &&
   typeof value.from_tenants_only === "boolean"
 
+const isTagPrefixRule = (value: unknown): value is TagPrefixRule =>
+  isRecord(value) && typeof value.tag === "string" && isStringArray(value.prefixes)
+
 const isGuestWritePolicy = (value: unknown): value is GuestWritePolicy =>
-  isRecord(value) && isNumberArray(value.kinds) && typeof value.tagged_to_tenant === "boolean"
+  isRecord(value) && isNumberArray(value.kinds) && typeof value.tagged_to_tenant === "boolean" &&
+  (value.tag_prefixes === undefined || value.tag_prefixes === null || isArrayOf(value.tag_prefixes, isTagPrefixRule))
 
 /** Type guard for {@link GuestPolicy}. */
 export const isGuestPolicy = (value: unknown): value is GuestPolicy =>

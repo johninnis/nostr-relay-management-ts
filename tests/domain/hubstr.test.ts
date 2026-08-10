@@ -79,6 +79,66 @@ Deno.test("isGuestPolicy - rejects a policy missing the write side", () => {
   assertFalse(isGuestPolicy({ read: { kinds: [0], global_kinds: [24133], from_tenants_only: true } }))
 })
 
+Deno.test("isGuestPolicy - accepts a tag prefix rule", () => {
+  assert(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: {
+      kinds: [1111],
+      tagged_to_tenant: false,
+      tag_prefixes: [
+        { tag: "I", prefixes: ["https://www.example.com/"] },
+        { tag: "i", prefixes: ["https://www.example.com/"] },
+      ],
+    },
+  }))
+})
+
+Deno.test("isGuestPolicy - accepts an empty tag prefix rule list", () => {
+  assert(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: { kinds: [1111], tagged_to_tenant: false, tag_prefixes: [] },
+  }))
+})
+
+Deno.test("isGuestPolicy - accepts a null tag prefix rule", () => {
+  assert(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: { kinds: [1111], tagged_to_tenant: false, tag_prefixes: null },
+  }))
+})
+
+Deno.test("isGuestPolicy - accepts a write policy from a relay predating the rule", () => {
+  assert(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: { kinds: [1111], tagged_to_tenant: false },
+  }))
+})
+
+Deno.test("isGuestPolicy - rejects a tag prefix rule with non-string prefixes", () => {
+  assertFalse(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: { kinds: [1111], tagged_to_tenant: false, tag_prefixes: [{ tag: "I", prefixes: [42] }] },
+  }))
+})
+
+Deno.test("isGuestPolicy - rejects a bare rule object where a list is expected", () => {
+  assertFalse(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: {
+      kinds: [1111],
+      tagged_to_tenant: false,
+      tag_prefixes: { tag: "I", prefixes: ["https://www.example.com/"] },
+    },
+  }))
+})
+
+Deno.test("isGuestPolicy - rejects a tag prefix rule with no tag", () => {
+  assertFalse(isGuestPolicy({
+    read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
+    write: { kinds: [1111], tagged_to_tenant: false, tag_prefixes: [{ prefixes: ["https://www.example.com/"] }] },
+  }))
+})
+
 Deno.test("isRateLimits - accepts numeric limits", () => {
   assert(isRateLimits({ events_per_minute: 60, subscriptions_per_minute: 10 }))
 })

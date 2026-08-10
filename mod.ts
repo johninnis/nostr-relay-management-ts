@@ -32,6 +32,7 @@ export type {
   RateLimits,
   RelayStats,
   Subscription,
+  TagPrefixRule,
   TenantCount,
 } from "./src/domain/hubstr.ts"
 export {
