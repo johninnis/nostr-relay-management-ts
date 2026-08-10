@@ -1,6 +1,6 @@
 {
   "name": "@innis/nostr-relay-management",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "TypeScript client for a Nostr relay's HTTP management surface: a signed NIP-86 RPC client plus pre-built data-shape types and guards for the common NIP-86 and Hubstr-extension responses. Signer + HttpClient ports, kind 27235 auth events, Result-based.",
   "exports": "./mod.ts",
