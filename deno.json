@@ -4,6 +4,10 @@
   "publish": {
     "exclude": ["tests/", "deno.lock", ".github/"]
   },
+  "minimumDependencyAge": {
+    "age": "PT24H",
+    "exclude": ["jsr:@innis/*"]
+  },
   "license": "MIT",
   "description": "TypeScript client for a Nostr relay's HTTP management surface: a signed NIP-86 RPC client plus pre-built data-shape types and guards for the common NIP-86 and Hubstr-extension responses. Signer + HttpClient ports, kind 27235 auth events, Result-based.",
   "exports": "./mod.ts",
