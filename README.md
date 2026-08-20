@@ -6,6 +6,12 @@ Building blocks for talking to a Nostr relay's HTTP management surface: a signed
 
 The shape mirrors `@innis/nostr-blossom`: signer + HTTP client are injected, every operation returns `Result<T, RelayManagementError>`, no exceptions are thrown internally.
 
+## Install
+
+```bash
+deno add jsr:@innis/nostr-relay-management
+```
+
 ## Public surface
 
 ### Domain — `src/domain/types.ts`, `src/domain/nip86.ts`, `src/domain/hubstr.ts` + `src/domain/errors.ts`
