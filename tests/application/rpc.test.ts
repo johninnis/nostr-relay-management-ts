@@ -1,6 +1,9 @@
 import { assert, assertEquals } from "@std/assert"
 import { createRpc } from "../../src/application/rpc.ts"
-import { RpcError } from "../../src/domain/errors.ts"
+import { MalformedResultError, RpcError } from "../../src/domain/errors.ts"
+import type { RelayStats } from "../../src/domain/hubstr.ts"
+import { isRelayStats } from "../../src/domain/hubstr.ts"
+import { isAcknowledged } from "../../src/domain/nip86.ts"
 import { parseManagementUrl } from "../../src/domain/types.ts"
 import {
   createCapturingHttpClient,
@@ -180,4 +183,63 @@ Deno.test("createRpc - propagates a transport-layer failure", async () => {
 
   assert(!result.success)
   assertEquals(result.error.tag, "ServerError")
+})
+
+const stats = {
+  events: 1,
+  tags: 2,
+  follows: 3,
+  mutes: 4,
+  relays: 5,
+  zaps: 6,
+  known_pubkeys: 7,
+  events_by_kind: [{ kind: 1, count: 1 }],
+  events_by_tenant: [],
+}
+
+Deno.test("createRpc - returns the guard-narrowed result when the guard accepts it", async () => {
+  const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify({ result: stats })))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "getstats", params: [], guard: isRelayStats })
+
+  assert(result.success)
+  const typed: RelayStats = result.value
+  assertEquals(typed, stats)
+})
+
+Deno.test("createRpc - fails with a MalformedResultError naming the method when the guard rejects the result", async () => {
+  const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify({ result: 42 })))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "getstats", params: [], guard: isRelayStats })
+
+  assert(!result.success)
+  assert(result.error instanceof MalformedResultError)
+  assertEquals(result.error.tag, "MalformedResultError")
+  assertEquals(result.error.method, "getstats")
+  assertEquals(result.error.result, 42)
+  assertEquals(result.error.message, "Malformed getstats result")
+})
+
+Deno.test("createRpc - a guarded call passes transport failures through unchanged", async () => {
+  const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify({ error: "not authorised" })))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"], guard: isAcknowledged })
+
+  assert(!result.success)
+  assertEquals(result.error.tag, "RpcError")
+})
+
+Deno.test("createRpc - without a guard returns the result as unknown, unvalidated", async () => {
+  const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify({ result: 42 })))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "getstats", params: [] })
+
+  assert(result.success)
+  // @ts-expect-error an unguarded result is `unknown` and must be narrowed before use
+  const narrowed: number = result.value
+  assertEquals(narrowed, 42)
 })

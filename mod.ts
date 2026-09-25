@@ -8,6 +8,7 @@ export {
 
 export type { BlockedIp, ModeratedEvent, ModeratedPubkey } from "./src/domain/nip86.ts"
 export {
+  isAcknowledged,
   isBlockedIp,
   isBlockedIpArray,
   isModeratedEvent,
@@ -49,11 +50,11 @@ export {
 } from "./src/domain/hubstr.ts"
 
 export type { RelayManagementError } from "./src/domain/errors.ts"
-export { RpcError } from "./src/domain/errors.ts"
+export { MalformedResultError, RpcError } from "./src/domain/errors.ts"
 
 export type { RelayManagementDeps, RelayManagementSigner } from "./src/application/ports.ts"
 
-export type { Rpc, RpcInput } from "./src/application/rpc.ts"
+export type { GuardedRpcInput, Rpc, RpcInput } from "./src/application/rpc.ts"
 export { createRpc } from "./src/application/rpc.ts"
 
 export { adaptSigner } from "./src/infrastructure/signer-adapter.ts"

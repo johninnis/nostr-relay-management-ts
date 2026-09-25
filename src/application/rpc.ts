@@ -5,7 +5,7 @@
 import type { HttpResponse, Result } from "@innis/nostr-core"
 import { buildNip98AuthEvent, DEFAULT_AUTH_EXPIRATION_SECONDS, encodeAuthHeader, failure, ok } from "@innis/nostr-core"
 import type { RelayManagementError } from "../domain/errors.ts"
-import { RpcError } from "../domain/errors.ts"
+import { MalformedResultError, RpcError } from "../domain/errors.ts"
 import type { ManagementUrl } from "../domain/types.ts"
 import type { RelayManagementDeps } from "./ports.ts"
 
@@ -18,14 +18,26 @@ export interface RpcInput {
   readonly signal?: AbortSignal
 }
 
-/** A signed NIP-86 management RPC: takes an {@link RpcInput} and resolves to the call's `result`, or a {@link RelayManagementError}. */
-export type Rpc = (input: RpcInput) => Promise<Result<unknown, RelayManagementError>>
+/** An {@link RpcInput} plus the `guard` that parses the call's untyped `result` into `T` — e.g. `isAcknowledged` for a mutation, `isRelayStats` for `getstats`. */
+export interface GuardedRpcInput<T> extends RpcInput {
+  readonly guard: (value: unknown) => value is T
+}
 
-/** Build the NIP-86 RPC client: signs each call as a kind-27235 NIP-98 auth event and POSTs it as `application/nostr+json+rpc`, returning the response `result` or a {@link RelayManagementError}. */
+/**
+ * A signed NIP-86 management RPC. Given a {@link GuardedRpcInput}, resolves to the `result` narrowed to `T`, or a
+ * {@link MalformedResultError} when the guard rejects it; given a plain {@link RpcInput}, resolves to the `unknown`
+ * `result`. Every other failure is a {@link RelayManagementError}.
+ */
+export interface Rpc {
+  <T>(input: GuardedRpcInput<T>): Promise<Result<T, RelayManagementError>>
+  (input: RpcInput): Promise<Result<unknown, RelayManagementError>>
+}
+
+/** Build the NIP-86 RPC client: signs each call as a kind-27235 NIP-98 auth event and POSTs it as `application/nostr+json+rpc`, returning the response `result` (narrowed by the call's `guard`, when given) or a {@link RelayManagementError}. */
 export const createRpc = (deps: RelayManagementDeps): Rpc => {
   const { signer, httpClient } = deps
 
-  return async (input: RpcInput): Promise<Result<unknown, RelayManagementError>> => {
+  const send = async (input: RpcInput): Promise<Result<unknown, RelayManagementError>> => {
     const bodyResult = serialiseRpcBody(input.method, input.params)
     if (!bodyResult.success) return bodyResult
     const body = bodyResult.value
@@ -56,6 +68,18 @@ export const createRpc = (deps: RelayManagementDeps): Rpc => {
 
     return parseRpcResponse(response.value)
   }
+
+  function rpc<T>(input: GuardedRpcInput<T>): Promise<Result<T, RelayManagementError>>
+  function rpc(input: RpcInput): Promise<Result<unknown, RelayManagementError>>
+  async function rpc(
+    input: RpcInput & { readonly guard?: (value: unknown) => boolean },
+  ): Promise<Result<unknown, RelayManagementError>> {
+    const response = await send(input)
+    if (!response.success || input.guard === undefined || input.guard(response.value)) return response
+    return failure(new MalformedResultError(input.method, response.value))
+  }
+
+  return rpc
 }
 
 const serialiseRpcBody = (

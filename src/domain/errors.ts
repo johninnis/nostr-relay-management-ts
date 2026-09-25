@@ -8,9 +8,22 @@ export class RpcError extends TaggedError<"RpcError"> {
   }
 }
 
-/** Every failure a relay-management RPC can return: a `SigningError`, an HTTP `>= 400` `ServerError`, an {@link RpcError}, or a transport `NetworkError`. Each carries a `tag` discriminant. */
+/** A NIP-86 RPC answered without an `error`, but its `result` failed the caller's guard. Carries the `"MalformedResultError"` tag, the `method` called and the offending `result`. */
+export class MalformedResultError extends TaggedError<"MalformedResultError"> {
+  readonly method: string
+  readonly result: unknown
+
+  constructor(method: string, result: unknown) {
+    super("MalformedResultError", `Malformed ${method} result`)
+    this.method = method
+    this.result = result
+  }
+}
+
+/** Every failure a relay-management RPC can return: a `SigningError`, an HTTP `>= 400` `ServerError`, an {@link RpcError}, a transport `NetworkError`, or a {@link MalformedResultError} when a guarded call's `result` has the wrong shape. Each carries a `tag` discriminant. */
 export type RelayManagementError =
   | SigningError
   | ServerError
   | NetworkError
   | RpcError
+  | MalformedResultError
