@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "@std/assert"
-import { parseEventId, parsePublicKey } from "@innis/nostr-core"
+import { eventIdFixture, publicKeyFixture } from "@innis/nostr-core/testing"
 import {
   type Connection,
   type ExploreResult,
@@ -35,8 +35,8 @@ const subscription: Subscription = {
   filters: [{ kinds: [1] }],
 }
 
-const tenantPubkey = parsePublicKey("a".repeat(64))
-const zappedNoteId = parseEventId("b".repeat(64))
+const tenantPubkey = publicKeyFixture("a".repeat(64))
+const zappedNoteId = eventIdFixture("b".repeat(64))
 
 const exploreResult: ExploreResult = {
   period: "24h",
@@ -57,26 +57,40 @@ const exploreResult: ExploreResult = {
 Deno.test("isGuestPolicy - accepts a well-formed policy", () => {
   assert(isGuestPolicy({
     read: { kinds: [0, 1], global_kinds: [24133], from_tenants_only: true },
-    write: { kinds: [1], tagged_to_tenant: false },
+    write: { kinds: [1], tagged_to_tenant: false, tag_prefixes: [] },
+  }))
+})
+
+Deno.test("isGuestPolicy - rejects a policy listing a kind that is not a NIP-01 event kind", () => {
+  assertFalse(isGuestPolicy({
+    read: { kinds: [0, 1.5], global_kinds: [], from_tenants_only: true },
+    write: { kinds: [1], tagged_to_tenant: false, tag_prefixes: [] },
   }))
 })
 
 Deno.test("isGuestPolicy - rejects a policy missing global_kinds", () => {
   assertFalse(isGuestPolicy({
     read: { kinds: [0, 1], from_tenants_only: true },
-    write: { kinds: [1], tagged_to_tenant: false },
+    write: { kinds: [1], tagged_to_tenant: false, tag_prefixes: [] },
   }))
 })
 
 Deno.test("isGuestPolicy - rejects a policy with a non-boolean flag", () => {
   assertFalse(isGuestPolicy({
     read: { kinds: [0, 1], global_kinds: [24133], from_tenants_only: "yes" },
-    write: { kinds: [1], tagged_to_tenant: false },
+    write: { kinds: [1], tagged_to_tenant: false, tag_prefixes: [] },
   }))
 })
 
 Deno.test("isGuestPolicy - rejects a policy missing the write side", () => {
   assertFalse(isGuestPolicy({ read: { kinds: [0], global_kinds: [24133], from_tenants_only: true } }))
+})
+
+Deno.test("isGuestPolicy - rejects a write side without tag_prefixes, with no default for an older relay (ADR-0002)", () => {
+  assertFalse(isGuestPolicy({
+    read: { kinds: [0], global_kinds: [], from_tenants_only: true },
+    write: { kinds: [1], tagged_to_tenant: false },
+  }))
 })
 
 Deno.test("isGuestPolicy - accepts a tag prefix rule", () => {
@@ -100,15 +114,15 @@ Deno.test("isGuestPolicy - accepts an empty tag prefix rule list", () => {
   }))
 })
 
-Deno.test("isGuestPolicy - accepts a null tag prefix rule", () => {
-  assert(isGuestPolicy({
+Deno.test("isGuestPolicy - rejects a null tag prefix rule list", () => {
+  assertFalse(isGuestPolicy({
     read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
     write: { kinds: [1111], tagged_to_tenant: false, tag_prefixes: null },
   }))
 })
 
-Deno.test("isGuestPolicy - accepts a write policy from a relay predating the rule", () => {
-  assert(isGuestPolicy({
+Deno.test("isGuestPolicy - rejects a write policy without its tag prefix rule list", () => {
+  assertFalse(isGuestPolicy({
     read: { kinds: [1111], global_kinds: [], from_tenants_only: false },
     write: { kinds: [1111], tagged_to_tenant: false },
   }))
@@ -185,6 +199,20 @@ Deno.test("isRelayStats - rejects a payload with a malformed kind count", () => 
     zaps: 6,
     known_pubkeys: 7,
     events_by_kind: [{ kind: 1 }],
+    events_by_tenant: [],
+  }))
+})
+
+Deno.test("isRelayStats - rejects a kind count whose kind is not a NIP-01 event kind", () => {
+  assertFalse(isRelayStats({
+    events: 1,
+    tags: 2,
+    follows: 3,
+    mutes: 4,
+    relays: 5,
+    zaps: 6,
+    known_pubkeys: 7,
+    events_by_kind: [{ kind: 65536, count: 1 }],
     events_by_tenant: [],
   }))
 })

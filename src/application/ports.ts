@@ -1,11 +1,9 @@
-import type { HttpClient, NostrEvent, Result, SigningError, UnsignedEvent } from "@innis/nostr-core"
+import type { HttpClient, Signer } from "@innis/nostr-core"
 
-/** The `Result`-returning signing port used by the RPC client — a narrower view of `@innis/nostr-core`'s throwing `Signer` that keeps the call sites catch-free. Build one from a `Signer` via {@link adaptSigner}. */
-export interface RelayManagementSigner {
-  readonly sign: (event: UnsignedEvent) => Promise<Result<NostrEvent, SigningError>>
-}
+/** The signing port used by the RPC client: the one `Signer` capability it needs. Any `@innis/nostr-core` `Signer` satisfies it, and a `SignerFailure` it returns is passed through as the call's `RelayManagementFailure`. */
+export type RelayManagementSigner = Pick<Signer, "signEvent">
 
-/** The dependency bundle {@link createRpc} takes: a {@link RelayManagementSigner} and an `HttpClient` transport. */
+/** The collaborators {@link createRpc} takes: a {@link RelayManagementSigner} and an `HttpClient` transport, which decides whether a relay at a private address is reached. */
 export interface RelayManagementDeps {
   readonly signer: RelayManagementSigner
   readonly httpClient: HttpClient

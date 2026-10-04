@@ -1,10 +1,10 @@
-import { assert, assertEquals } from "@std/assert"
+import { assert, assertEquals, assertRejects } from "@std/assert"
+import { createHttpClient, failure, InvalidArgumentError } from "@innis/nostr-core"
+import type { RpcInput } from "../../src/application/rpc.ts"
 import { createRpc } from "../../src/application/rpc.ts"
-import { MalformedResultError, RpcError } from "../../src/domain/errors.ts"
-import type { RelayStats } from "../../src/domain/hubstr.ts"
+import type { RateLimits, RelayStats } from "../../src/domain/hubstr.ts"
 import { isRelayStats } from "../../src/domain/hubstr.ts"
 import { isAcknowledged } from "../../src/domain/nip86.ts"
-import { parseManagementUrl } from "../../src/domain/types.ts"
 import {
   createCapturingHttpClient,
   createFailingSigner,
@@ -12,8 +12,9 @@ import {
   createFakeSigner,
   createFakeSuccessResponse,
 } from "../_helpers/fakes.ts"
+import { httpUrlFixture } from "@innis/nostr-core/testing"
 
-const relayUrl = parseManagementUrl("https://relay.example/management")
+const relayUrl = httpUrlFixture("https://relay.example/management")
 
 Deno.test("createRpc - signs the request and returns the result value on success", async () => {
   const { client, requests } = createCapturingHttpClient(
@@ -52,7 +53,7 @@ Deno.test("createRpc - signs an auth event bearing a NIP-98 expiration tag in th
   assert(Number(expiration[1]) > event.created_at)
 })
 
-Deno.test("createRpc - forwards timeoutMs and signal to the http client", async () => {
+Deno.test("createRpc - forwards its signal to the http client", async () => {
   const { client, requests } = createCapturingHttpClient(
     createFakeSuccessResponse(200, JSON.stringify({ result: true })),
   )
@@ -63,14 +64,12 @@ Deno.test("createRpc - forwards timeoutMs and signal to the http client", async 
     relayUrl,
     method: "banpubkey",
     params: ["abc"],
-    timeoutMs: 5000,
     signal: controller.signal,
   })
 
   assert(result.success)
   const request = requests[0]
   assert(request)
-  assertEquals(request.timeoutMs, 5000)
   assertEquals(request.signal, controller.signal)
 })
 
@@ -86,7 +85,7 @@ Deno.test("createRpc - treats a null error field as absent and returns the resul
   assertEquals(result.value, true)
 })
 
-Deno.test("createRpc - maps a JSON-RPC error response to a Failure(RpcError)", async () => {
+Deno.test("createRpc - maps a JSON-RPC error response to an RpcFailure", async () => {
   const httpClient = createFakeHttpClient(
     createFakeSuccessResponse(200, JSON.stringify({ error: "not authorised" })),
   )
@@ -95,11 +94,10 @@ Deno.test("createRpc - maps a JSON-RPC error response to a Failure(RpcError)", a
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc", "spam"] })
 
   assert(!result.success)
-  assert(result.error instanceof RpcError)
-  assertEquals(result.error.message, "not authorised")
+  assertEquals(result.error, { type: "rpc", message: "not authorised" })
 })
 
-Deno.test("createRpc - preserves a structured (non-string) error payload", async () => {
+Deno.test("createRpc - refuses an envelope whose error is not a string (shared ADR-0037)", async () => {
   const httpClient = createFakeHttpClient(
     createFakeSuccessResponse(200, JSON.stringify({ error: { code: 401, message: "nope" } })),
   )
@@ -108,9 +106,19 @@ Deno.test("createRpc - preserves a structured (non-string) error payload", async
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
 
   assert(!result.success)
-  assert(result.error instanceof RpcError)
-  assertEquals(result.error.message, JSON.stringify({ code: 401, message: "nope" }))
-  assertEquals(result.error.cause, { code: 401, message: "nope" })
+  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: error is not a non-empty string" })
+})
+
+Deno.test("createRpc - refuses an envelope whose error is the empty string, even beside a result", async () => {
+  const httpClient = createFakeHttpClient(
+    createFakeSuccessResponse(200, JSON.stringify({ result: true, error: "" })),
+  )
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
+
+  assert(!result.success)
+  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: error is not a non-empty string" })
 })
 
 Deno.test("createRpc - propagates a signing failure without making a request", async () => {
@@ -122,8 +130,18 @@ Deno.test("createRpc - propagates a signing failure without making a request", a
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
 
   assert(!result.success)
-  assertEquals(result.error.tag, "SigningError")
+  assertEquals(result.error, { type: "sign-failed", message: "Test signing failure" })
   assertEquals(requests.length, 0)
+})
+
+Deno.test("createRpc - a response body that is not JSON is an rpc failure, not a network one", async () => {
+  const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, "<html>bad gateway</html>"))
+  const result = await createRpc({ signer: createFakeSigner(), httpClient })({
+    relayUrl,
+    method: "supportedmethods",
+    params: [],
+  })
+  assertEquals(result, failure({ type: "rpc", message: "Invalid RPC response: not JSON" }))
 })
 
 Deno.test("createRpc - fails when the response body is not an object", async () => {
@@ -133,8 +151,26 @@ Deno.test("createRpc - fails when the response body is not an object", async () 
   const result = await rpc({ relayUrl, method: "supportedmethods", params: [] })
 
   assert(!result.success)
-  assert(result.error instanceof RpcError)
-  assertEquals(result.error.message, "Invalid RPC response: not an object")
+  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: not an object" })
+})
+
+Deno.test("createRpc - refuses a response body that is a JSON list, not an object (shared ADR-0092)", async () => {
+  const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify([{ result: true }])))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "supportedmethods", params: [] })
+
+  assertEquals(result, failure({ type: "rpc", message: "Invalid RPC response: not an object" }))
+})
+
+Deno.test("createRpc - throws when the method is empty, a programmer fault, without making a request", async () => {
+  const { client, requests } = createCapturingHttpClient(
+    createFakeSuccessResponse(200, JSON.stringify({ result: true })),
+  )
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient: client })
+
+  await assertRejects(() => rpc({ relayUrl, method: "", params: [] }), InvalidArgumentError)
+  assertEquals(requests.length, 0)
 })
 
 Deno.test("createRpc - fails when the response carries only a null error", async () => {
@@ -144,8 +180,7 @@ Deno.test("createRpc - fails when the response carries only a null error", async
   const result = await rpc({ relayUrl, method: "supportedmethods", params: [] })
 
   assert(!result.success)
-  assert(result.error instanceof RpcError)
-  assertEquals(result.error.message, "Invalid RPC response: missing result and error")
+  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: missing result and error" })
 })
 
 Deno.test("createRpc - fails when the response has neither result nor error", async () => {
@@ -155,21 +190,40 @@ Deno.test("createRpc - fails when the response has neither result nor error", as
   const result = await rpc({ relayUrl, method: "supportedmethods", params: [] })
 
   assert(!result.success)
-  assert(result.error instanceof RpcError)
-  assertEquals(result.error.message, "Invalid RPC response: missing result and error")
+  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: missing result and error" })
 })
 
-Deno.test("createRpc - fails with an RpcError when params cannot be serialised, without making a request", async () => {
+Deno.test("createRpc - refuses at compile time params that JSON cannot write", () => {
+  // @ts-expect-error: a bigint has no JSON form
+  const input: RpcInput<ReadonlyArray<bigint>> = { relayUrl, method: "banpubkey", params: [10n] }
+  assertEquals(input.method, "banpubkey")
+})
+
+Deno.test("createRpc - sends params typed by an interface, as a NIP-86 object parameter", async () => {
   const { client, requests } = createCapturingHttpClient(
     createFakeSuccessResponse(200, JSON.stringify({ result: true })),
   )
   const rpc = createRpc({ signer: createFakeSigner(), httpClient: client })
+  const limits: RateLimits = { events_per_minute: 60, subscriptions_per_minute: 30 }
 
-  const result = await rpc({ relayUrl, method: "banpubkey", params: [10n] })
+  const result = await rpc({ relayUrl, method: "setratelimits", params: [limits], guard: isAcknowledged })
 
-  assert(!result.success)
-  assert(result.error instanceof RpcError)
-  assertEquals(result.error.message, "Failed to serialise RPC request body")
+  assert(result.success)
+  assertEquals(requests[0]?.body, JSON.stringify({ method: "setratelimits", params: [limits] }))
+})
+
+Deno.test("createRpc - throws when params are cyclic, a programmer fault, without making a request", async () => {
+  interface Link {
+    next: Link | null
+  }
+  const { client, requests } = createCapturingHttpClient(
+    createFakeSuccessResponse(200, JSON.stringify({ result: true })),
+  )
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient: client })
+  const link: Link = { next: null }
+  link.next = link
+
+  await assertRejects(() => rpc({ relayUrl, method: "banpubkey", params: [link] }), TypeError)
   assertEquals(requests.length, 0)
 })
 
@@ -182,7 +236,7 @@ Deno.test("createRpc - propagates a transport-layer failure", async () => {
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
 
   assert(!result.success)
-  assertEquals(result.error.tag, "ServerError")
+  assertEquals(result.error.type, "server")
 })
 
 const stats = {
@@ -208,18 +262,14 @@ Deno.test("createRpc - returns the guard-narrowed result when the guard accepts 
   assertEquals(typed, stats)
 })
 
-Deno.test("createRpc - fails with a MalformedResultError naming the method when the guard rejects the result", async () => {
+Deno.test("createRpc - fails with a MalformedResultFailure naming the method when the guard rejects the result", async () => {
   const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify({ result: 42 })))
   const rpc = createRpc({ signer: createFakeSigner(), httpClient })
 
   const result = await rpc({ relayUrl, method: "getstats", params: [], guard: isRelayStats })
 
   assert(!result.success)
-  assert(result.error instanceof MalformedResultError)
-  assertEquals(result.error.tag, "MalformedResultError")
-  assertEquals(result.error.method, "getstats")
-  assertEquals(result.error.result, 42)
-  assertEquals(result.error.message, "Malformed getstats result")
+  assertEquals(result.error, { type: "malformed-result", method: "getstats" })
 })
 
 Deno.test("createRpc - a guarded call passes transport failures through unchanged", async () => {
@@ -229,17 +279,87 @@ Deno.test("createRpc - a guarded call passes transport failures through unchange
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"], guard: isAcknowledged })
 
   assert(!result.success)
-  assertEquals(result.error.tag, "RpcError")
+  assertEquals(result.error.type, "rpc")
 })
 
-Deno.test("createRpc - without a guard returns the result as unknown, unvalidated", async () => {
+Deno.test("createRpc - without a guard returns the result as an unvalidated JsonValue", async () => {
   const httpClient = createFakeHttpClient(createFakeSuccessResponse(200, JSON.stringify({ result: 42 })))
   const rpc = createRpc({ signer: createFakeSigner(), httpClient })
 
   const result = await rpc({ relayUrl, method: "getstats", params: [] })
 
   assert(result.success)
-  // @ts-expect-error an unguarded result is `unknown` and must be narrowed before use
+  // @ts-expect-error an unguarded result is a `JsonValue` and must be narrowed before use
   const narrowed: number = result.value
   assertEquals(narrowed, 42)
+})
+
+const answeringFetch = (response: () => Response): { fetch: typeof globalThis.fetch; urls: Array<string> } => {
+  const urls: Array<string> = []
+  return {
+    fetch: (input) => {
+      urls.push(String(input))
+      return Promise.resolve(response())
+    },
+    urls,
+  }
+}
+
+Deno.test("createRpc - reaches a relay the user runs on a loopback address through a client that allows one", async () => {
+  const stub = answeringFetch(() => new Response(JSON.stringify({ result: true })))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient: createHttpClient("allow-private", stub.fetch) })
+
+  const result = await rpc({ relayUrl: httpUrlFixture("http://127.0.0.1:7777"), method: "banpubkey", params: [] })
+
+  assertEquals(result, { success: true, value: true })
+})
+
+Deno.test("createRpc - reaches a relay the user runs on a private network address through a client that allows one", async () => {
+  const stub = answeringFetch(() => new Response(JSON.stringify({ result: true })))
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient: createHttpClient("allow-private", stub.fetch) })
+
+  await rpc({ relayUrl: httpUrlFixture("http://192.168.1.20/admin"), method: "banpubkey", params: [] })
+
+  assertEquals(stub.urls, ["http://192.168.1.20/admin"])
+})
+
+Deno.test("createRpc - still refuses to follow a redirect from the relay", async () => {
+  const stub = answeringFetch(() =>
+    new Response(null, { status: 302, headers: { location: "https://elsewhere.example/" } })
+  )
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient: createHttpClient("allow-private", stub.fetch) })
+
+  const result = await rpc({ relayUrl: httpUrlFixture("http://localhost:7777"), method: "banpubkey", params: [] })
+
+  assertEquals(result.success ? null : result.error.type, "server")
+})
+
+Deno.test("createRpc - leaves the response body ceiling at the client default", async () => {
+  const { client, requests } = createCapturingHttpClient(
+    createFakeSuccessResponse(200, JSON.stringify({ result: true })),
+  )
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient: client })
+
+  await rpc({ relayUrl, method: "banpubkey", params: [] })
+
+  assertEquals(requests[0]?.maxBodyBytes, undefined)
+})
+
+Deno.test("createRpc - takes its params as a list, never a JSON object (shared ADR-0037, ADR-0092)", () => {
+  // @ts-expect-error: NIP-86 params are a list, and an empty object is not an empty list
+  const input: RpcInput = { relayUrl, method: "supportedmethods", params: {} }
+  assertEquals(input.method, "supportedmethods")
+})
+
+Deno.test("createRpc - sends nothing and returns an rpc failure when the NIP-98 header is longer than a relay reads", async () => {
+  const { client, requests } = createCapturingHttpClient(createFakeSuccessResponse(200, JSON.stringify({ result: [] })))
+  const rpc = createRpc({
+    signer: createFakeSigner(),
+    httpClient: client,
+  })
+  const longUrl = httpUrlFixture(`https://relay.example/${"a".repeat(4096)}`)
+
+  const result = await rpc({ relayUrl: longUrl, method: "supportedmethods", params: [] })
+
+  assertEquals([result.success ? null : result.error.type, requests.length], ["rpc", 0])
 })

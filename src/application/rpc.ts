@@ -1,66 +1,81 @@
-// JSON.stringify is the only sanctioned JSON serialiser and signals failure (BigInt, cycles) by throwing;
-// serialiseRpcBody catches that single throw and returns a Result, keeping the public RPC boundary throw-free.
-// deno-lint-ignore-file innis/no-catch-in-layer
-
-import type { HttpResponse, Result } from "@innis/nostr-core"
-import { buildNip98AuthEvent, DEFAULT_AUTH_EXPIRATION_SECONDS, encodeAuthHeader, failure, ok } from "@innis/nostr-core"
-import type { RelayManagementError } from "../domain/errors.ts"
-import { MalformedResultError, RpcError } from "../domain/errors.ts"
-import type { ManagementUrl } from "../domain/types.ts"
+import type { HttpResponse, HttpUrl, JsonSerialisable, JsonValue, Result } from "@innis/nostr-core"
+import {
+  buildNip98AuthEvent,
+  DEFAULT_TIMESTAMP_TOLERANCE_SECONDS,
+  encodeAuthHeader,
+  failure,
+  InvalidArgumentError,
+  ok,
+} from "@innis/nostr-core"
+import type { RelayManagementFailure } from "../domain/failure/relay-management-failure.ts"
 import type { RelayManagementDeps } from "./ports.ts"
 
-/** Input to an {@link Rpc} call: the relay's {@link ManagementUrl}, the NIP-86 `method` name, its positional `params`, and optional abort controls forwarded verbatim to the `HttpClient` (`timeoutMs` caps the headers exchange; `signal` aborts the in-flight call). */
-export interface RpcInput {
-  readonly relayUrl: ManagementUrl
+/**
+ * Input to an {@link Rpc} call: the relay's management endpoint, an `HttpUrl` (`wsToHttp` of its relay URL), the NIP-86
+ * `method` name, its positional `params`, and an optional `signal`, forwarded verbatim to the `HttpClient`, that aborts
+ * the in-flight call (a deadline is a signal too: `AbortSignal.timeout(ms)`). `params` is a list `JSON.stringify` writes
+ * as JSON, so a bigint, a function, `undefined` or an un-narrowed `unknown` among them does not compile.
+ */
+export interface RpcInput<P extends ReadonlyArray<unknown> = ReadonlyArray<JsonValue>> {
+  readonly relayUrl: HttpUrl
   readonly method: string
-  readonly params: ReadonlyArray<unknown>
-  readonly timeoutMs?: number
+  readonly params: P & JsonSerialisable<P>
   readonly signal?: AbortSignal
 }
 
 /** An {@link RpcInput} plus the `guard` that parses the call's untyped `result` into `T` — e.g. `isAcknowledged` for a mutation, `isRelayStats` for `getstats`. */
-export interface GuardedRpcInput<T> extends RpcInput {
+export interface GuardedRpcInput<T, P extends ReadonlyArray<unknown> = ReadonlyArray<JsonValue>> extends RpcInput<P> {
   readonly guard: (value: unknown) => value is T
 }
 
 /**
  * A signed NIP-86 management RPC. Given a {@link GuardedRpcInput}, resolves to the `result` narrowed to `T`, or a
- * {@link MalformedResultError} when the guard rejects it; given a plain {@link RpcInput}, resolves to the `unknown`
- * `result`. Every other failure is a {@link RelayManagementError}.
+ * {@link MalformedResultFailure} when the guard rejects it; given a plain {@link RpcInput}, resolves to the `result`
+ * as the `JsonValue` it is. Every other failure is a {@link RelayManagementFailure}.
  */
 export interface Rpc {
-  <T>(input: GuardedRpcInput<T>): Promise<Result<T, RelayManagementError>>
-  (input: RpcInput): Promise<Result<unknown, RelayManagementError>>
+  <T, P extends ReadonlyArray<unknown>>(input: GuardedRpcInput<T, P>): Promise<Result<T, RelayManagementFailure>>
+  <P extends ReadonlyArray<unknown>>(input: RpcInput<P>): Promise<Result<JsonValue, RelayManagementFailure>>
 }
 
-/** Build the NIP-86 RPC client: signs each call as a kind-27235 NIP-98 auth event and POSTs it as `application/nostr+json+rpc`, returning the response `result` (narrowed by the call's `guard`, when given) or a {@link RelayManagementError}. */
+/**
+ * Build the NIP-86 RPC client: signs each call as a kind-27235 NIP-98 auth event and POSTs it as
+ * `application/nostr+json+rpc`, returning the response `result` (narrowed by the call's `guard`, when given) or a
+ * {@link RelayManagementFailure}. The relay is the user's own, so give it a client that reaches a loopback or
+ * private-network address (`createHttpClient("allow-private")`) to administer one there; a redirect is still refused
+ * and the body ceiling is the client's default. A NIP-98 header longer than the 4096 characters a relay reads is an
+ * `rpc` failure, and nothing is sent. An empty `method` throws `InvalidArgumentError`, and a cyclic `params` value throws
+ * `JSON.stringify`'s `TypeError`: both are programmer faults, and nothing is sent.
+ */
 export const createRpc = (deps: RelayManagementDeps): Rpc => {
   const { signer, httpClient } = deps
 
-  const send = async (input: RpcInput): Promise<Result<unknown, RelayManagementError>> => {
-    const bodyResult = serialiseRpcBody(input.method, input.params)
-    if (!bodyResult.success) return bodyResult
-    const body = bodyResult.value
+  const send = async (input: RpcInput<ReadonlyArray<unknown>>): Promise<Result<JsonValue, RelayManagementFailure>> => {
+    if (input.method === "") throw new InvalidArgumentError("A NIP-86 request names its method, not the empty string")
+    const body = JSON.stringify({ method: input.method, params: input.params })
 
-    const unsigned = await buildNip98AuthEvent({
+    const unsigned = buildNip98AuthEvent({
       url: input.relayUrl,
       method: "POST",
       body,
-      expiresInSeconds: DEFAULT_AUTH_EXPIRATION_SECONDS,
+      expiresInSeconds: DEFAULT_TIMESTAMP_TOLERANCE_SECONDS,
     })
 
-    const signResult = await signer.sign(unsigned)
+    const signResult = await signer.signEvent(unsigned)
     if (!signResult.success) return signResult
+    const authorization = encodeAuthHeader(signResult.value)
+    if (authorization === null) {
+      return failure({ type: "rpc", message: "Invalid RPC request: its NIP-98 header is longer than a relay reads" })
+    }
 
     const response = await httpClient.request({
       url: input.relayUrl,
       method: "POST",
       headers: {
         "Content-Type": "application/nostr+json+rpc",
-        "Authorization": encodeAuthHeader(signResult.value),
+        "Authorization": authorization,
       },
       body,
-      timeoutMs: input.timeoutMs,
       signal: input.signal,
     })
 
@@ -69,49 +84,45 @@ export const createRpc = (deps: RelayManagementDeps): Rpc => {
     return parseRpcResponse(response.value)
   }
 
-  function rpc<T>(input: GuardedRpcInput<T>): Promise<Result<T, RelayManagementError>>
-  function rpc(input: RpcInput): Promise<Result<unknown, RelayManagementError>>
+  function rpc<T, P extends ReadonlyArray<unknown>>(
+    input: GuardedRpcInput<T, P>,
+  ): Promise<Result<T, RelayManagementFailure>>
+  function rpc<P extends ReadonlyArray<unknown>>(input: RpcInput<P>): Promise<Result<JsonValue, RelayManagementFailure>>
   async function rpc(
-    input: RpcInput & { readonly guard?: (value: unknown) => boolean },
-  ): Promise<Result<unknown, RelayManagementError>> {
+    input: RpcInput<ReadonlyArray<unknown>> & { readonly guard?: (value: JsonValue) => boolean },
+  ): Promise<Result<JsonValue, RelayManagementFailure>> {
     const response = await send(input)
     if (!response.success || input.guard === undefined || input.guard(response.value)) return response
-    return failure(new MalformedResultError(input.method, response.value))
+    return failure({ type: "malformed-result", method: input.method })
   }
 
   return rpc
 }
 
-const serialiseRpcBody = (
-  method: string,
-  params: ReadonlyArray<unknown>,
-): Result<string, RpcError> => {
-  try {
-    return ok(JSON.stringify({ method, params }))
-  } catch (error) {
-    return failure(new RpcError("Failed to serialise RPC request body", error))
-  }
-}
-
 const parseRpcResponse = async (
   response: HttpResponse,
-): Promise<Result<unknown, RelayManagementError>> => {
+): Promise<Result<JsonValue, RelayManagementFailure>> => {
   const dataResult = await response.json()
-  if (!dataResult.success) return dataResult
+  if (!dataResult.success) {
+    return dataResult.error.type === "malformed-body"
+      ? failure({ type: "rpc", message: "Invalid RPC response: not JSON" })
+      : failure(dataResult.error)
+  }
   const data = dataResult.value
 
-  if (typeof data !== "object" || data === null) {
-    return failure(new RpcError("Invalid RPC response: not an object"))
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return failure({ type: "rpc", message: "Invalid RPC response: not an object" })
   }
 
-  if ("error" in data && data.error !== undefined && data.error !== null) {
-    const message = typeof data.error === "string" ? data.error : JSON.stringify(data.error)
-    return failure(new RpcError(message, data.error))
+  const error = "error" in data ? data.error : undefined
+  if (typeof error === "string" && error !== "") return failure({ type: "rpc", message: error })
+  if (error !== undefined && error !== null) {
+    return failure({ type: "rpc", message: "Invalid RPC response: error is not a non-empty string" })
   }
 
   if ("result" in data) {
     return ok(data.result)
   }
 
-  return failure(new RpcError("Invalid RPC response: missing result and error"))
+  return failure({ type: "rpc", message: "Invalid RPC response: missing result and error" })
 }

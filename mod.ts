@@ -1,11 +1,3 @@
-export type { ManagementUrl } from "./src/domain/types.ts"
-export {
-  InvalidManagementUrlError,
-  isValidManagementUrl,
-  parseManagementUrl,
-  tryParseManagementUrl,
-} from "./src/domain/types.ts"
-
 export type { BlockedIp, ModeratedEvent, ModeratedPubkey } from "./src/domain/nip86.ts"
 export {
   isAcknowledged,
@@ -49,12 +41,13 @@ export {
   parseExplorePeriod,
 } from "./src/domain/hubstr.ts"
 
-export type { RelayManagementError } from "./src/domain/errors.ts"
-export { MalformedResultError, RpcError } from "./src/domain/errors.ts"
+export type {
+  MalformedResultFailure,
+  RelayManagementFailure,
+  RpcFailure,
+} from "./src/domain/failure/relay-management-failure.ts"
 
 export type { RelayManagementDeps, RelayManagementSigner } from "./src/application/ports.ts"
 
 export type { GuardedRpcInput, Rpc, RpcInput } from "./src/application/rpc.ts"
 export { createRpc } from "./src/application/rpc.ts"
-
-export { adaptSigner } from "./src/infrastructure/signer-adapter.ts"
