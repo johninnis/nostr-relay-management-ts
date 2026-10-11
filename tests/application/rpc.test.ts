@@ -97,7 +97,7 @@ Deno.test("createRpc - maps a JSON-RPC error response to an RpcFailure", async (
   assertEquals(result.error, { type: "rpc", message: "not authorised" })
 })
 
-Deno.test("createRpc - refuses an envelope whose error is not a string (shared ADR-0037)", async () => {
+Deno.test("createRpc - refuses an envelope whose error is neither a string nor null (shared ADR-0037)", async () => {
   const httpClient = createFakeHttpClient(
     createFakeSuccessResponse(200, JSON.stringify({ error: { code: 401, message: "nope" } })),
   )
@@ -105,11 +105,10 @@ Deno.test("createRpc - refuses an envelope whose error is not a string (shared A
 
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
 
-  assert(!result.success)
-  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: error is not a non-empty string" })
+  assertEquals(result, failure({ type: "rpc", message: "Invalid RPC response: error is neither a string nor null" }))
 })
 
-Deno.test("createRpc - refuses an envelope whose error is the empty string, even beside a result", async () => {
+Deno.test("createRpc - reads an empty-string error beside a result as a success (shared ADR-0037)", async () => {
   const httpClient = createFakeHttpClient(
     createFakeSuccessResponse(200, JSON.stringify({ result: true, error: "" })),
   )
@@ -117,8 +116,18 @@ Deno.test("createRpc - refuses an envelope whose error is the empty string, even
 
   const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
 
-  assert(!result.success)
-  assertEquals(result.error, { type: "rpc", message: "Invalid RPC response: error is not a non-empty string" })
+  assertEquals(result, { success: true, value: true })
+})
+
+Deno.test("createRpc - refuses an envelope whose only error is the empty string, as it states no outcome (shared ADR-0037)", async () => {
+  const httpClient = createFakeHttpClient(
+    createFakeSuccessResponse(200, JSON.stringify({ error: "" })),
+  )
+  const rpc = createRpc({ signer: createFakeSigner(), httpClient })
+
+  const result = await rpc({ relayUrl, method: "banpubkey", params: ["abc"] })
+
+  assertEquals(result, failure({ type: "rpc", message: "Invalid RPC response: missing result and error" }))
 })
 
 Deno.test("createRpc - propagates a signing failure without making a request", async () => {

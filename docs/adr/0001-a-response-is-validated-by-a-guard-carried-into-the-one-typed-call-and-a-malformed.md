@@ -21,4 +21,4 @@ The package ships the guards for the NIP-86 and Hubstr-extension shapes; a calle
 - A caller receives either a value of the type it asked for or a failure it can show. No caller needs a type assertion on a relay response.
 - Supporting a new method means choosing a guard at the call. Changing what a relay returns means changing that one guard.
 - Do not add a throwing variant, a method-keyed guard table, or a post-call validator beside the call: each reopens one of the gaps above. `rpc.test.ts` pins the returned `malformed-result` failure.
-- Shared decisions: nostr-adrs ADR-0001 (an anticipated outcome is returned, a fault is thrown) and ADR-0037 (the NIP-86 envelope states exactly one outcome). Hubstr's client records the same split from the consumer's side in its ADR-0031.
+- Shared decisions: nostr-adrs ADR-0001 (an anticipated outcome is returned, a fault is thrown) and ADR-0037 (a NIP-86 envelope is written with one outcome and read by its error). Hubstr's client records the same split from the consumer's side in its ADR-0031.

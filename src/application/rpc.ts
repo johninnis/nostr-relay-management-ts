@@ -5,6 +5,7 @@ import {
   encodeAuthHeader,
   failure,
   InvalidArgumentError,
+  isRecord,
   ok,
 } from "@innis/nostr-core"
 import type { RelayManagementFailure } from "../domain/failure/relay-management-failure.ts"
@@ -109,20 +110,17 @@ const parseRpcResponse = async (
       : failure(dataResult.error)
   }
   const data = dataResult.value
+  if (!isRecord(data)) return failure({ type: "rpc", message: "Invalid RPC response: not an object" })
 
-  if (typeof data !== "object" || data === null || Array.isArray(data)) {
-    return failure({ type: "rpc", message: "Invalid RPC response: not an object" })
+  // Deliberate: an error that is absent, null or the empty string states no failure — see shared ADR-0037
+  const error = data.error ?? ""
+  if (typeof error !== "string") {
+    return failure({ type: "rpc", message: "Invalid RPC response: error is neither a string nor null" })
   }
+  if (error !== "") return failure({ type: "rpc", message: error })
 
-  const error = "error" in data ? data.error : undefined
-  if (typeof error === "string" && error !== "") return failure({ type: "rpc", message: error })
-  if (error !== undefined && error !== null) {
-    return failure({ type: "rpc", message: "Invalid RPC response: error is not a non-empty string" })
-  }
-
-  if ("result" in data) {
-    return ok(data.result)
-  }
-
-  return failure({ type: "rpc", message: "Invalid RPC response: missing result and error" })
+  const result = data.result
+  return result === undefined
+    ? failure({ type: "rpc", message: "Invalid RPC response: missing result and error" })
+    : ok(result)
 }
