@@ -1,5 +1,6 @@
 import type { EventId, PublicKey } from "@innis/nostr-core"
-import { isArrayOf, isRecord, isStringArray, isValidEventId, isValidKind, isValidPublicKey } from "@innis/nostr-core"
+import { isArrayOf, isRecord, isValidEventId, isValidKind, isValidPublicKey } from "@innis/nostr-core"
+import { isNonEmptyList, type NonEmptyList } from "./non-empty-list.ts"
 
 /** Hubstr guest read policy: which event `kinds` a non-tenant may read, which of those `global_kinds` are readable regardless of author (bypassing `from_tenants_only`), and whether the remaining reads are restricted to tenant-authored events. */
 export interface GuestReadPolicy {
@@ -8,10 +9,16 @@ export interface GuestReadPolicy {
   readonly from_tenants_only: boolean
 }
 
-/** One Hubstr guest write admission rule: the event carries `tag` with a value starting with one of `prefixes`. */
+/**
+ * One Hubstr guest write admission rule: an event of one of `kinds` carries `tag` with a value starting with one of
+ * `prefixes`. A rule admits nothing outside its `kinds`. The relay holds a rule only with a non-empty `tag`, at least
+ * one prefix, none of them empty, and at least one kind, and {@link isGuestPolicy} reads a rule no other way. Both
+ * lists are {@link NonEmptyList}s, so a rule without a prefix or a kind does not compile.
+ */
 export interface TagPrefixRule {
   readonly tag: string
-  readonly prefixes: ReadonlyArray<string>
+  readonly prefixes: NonEmptyList<string>
+  readonly kinds: NonEmptyList<number>
 }
 
 /**
@@ -20,7 +27,9 @@ export interface TagPrefixRule {
  *
  * `tagged_to_tenant` and `tag_prefixes` are alternatives: an event satisfies the policy by meeting whichever of the
  * configured checks it can, so a relay can take gift wraps addressed to a tenant and comments naming a page at once.
- * `kinds` is not an alternative — every guest write must pass it. An empty `tag_prefixes` is no requirement.
+ * `tagged_to_tenant` covers every writable kind; a rule covers only its own `kinds`. `kinds` is not an alternative —
+ * every guest write must pass it. Only with `tagged_to_tenant` off and `tag_prefixes` empty is there no provenance
+ * requirement.
  */
 export interface GuestWritePolicy {
   readonly kinds: ReadonlyArray<number>
@@ -40,10 +49,19 @@ const isGuestReadPolicy = (value: unknown): value is GuestReadPolicy =>
   isRecord(value) && isKindArray(value.kinds) && isKindArray(value.global_kinds) &&
   typeof value.from_tenants_only === "boolean"
 
-const isTagPrefixRule = (value: unknown): value is TagPrefixRule =>
-  isRecord(value) && typeof value.tag === "string" && isStringArray(value.prefixes)
+const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value !== ""
 
-// Deliberate: tag_prefixes is required, with no default for a relay that omits it — see ADR-0002
+const isNonEmptyListOf = <T>(
+  value: unknown,
+  guard: (element: unknown) => element is T,
+): value is NonEmptyList<T> => isArrayOf(value, guard) && isNonEmptyList(value)
+
+// Deliberate: a rule is read only as the relay accepts one, with no default to every kind or value — see ADR-0004
+const isTagPrefixRule = (value: unknown): value is TagPrefixRule =>
+  isRecord(value) && isNonEmptyString(value.tag) && isNonEmptyListOf(value.prefixes, isNonEmptyString) &&
+  isNonEmptyListOf(value.kinds, isValidKind)
+
+// Deliberate: tag_prefixes is required, with no default for a relay that omits it — see ADR-0004
 const isGuestWritePolicy = (value: unknown): value is GuestWritePolicy =>
   isRecord(value) && isKindArray(value.kinds) && typeof value.tagged_to_tenant === "boolean" &&
   isArrayOf(value.tag_prefixes, isTagPrefixRule)

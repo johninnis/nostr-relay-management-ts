@@ -19,3 +19,4 @@ A cyclic value satisfies the type and cannot be written. It is a programmer faul
 - A request the client cannot encode faithfully fails to compile rather than at run time or, worse, as a silently altered argument on the wire.
 - A caller holding an `unknown` narrows it before passing it as a param.
 - `rpc.test.ts` pins the compile-time refusal of a `bigint` and the thrown `TypeError` of a cycle, with no request made.
+- Shared decision: nostr-adrs ADR-0092.

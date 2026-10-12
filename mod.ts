@@ -9,6 +9,9 @@ export {
   isModeratedPubkeyArray,
 } from "./src/domain/nip86.ts"
 
+export type { NonEmptyList } from "./src/domain/non-empty-list.ts"
+export { isNonEmptyList } from "./src/domain/non-empty-list.ts"
+
 export type {
   Connection,
   ConnectionSubscription,
